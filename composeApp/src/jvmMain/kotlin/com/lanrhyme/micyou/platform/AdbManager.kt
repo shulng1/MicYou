@@ -1,13 +1,15 @@
 package com.lanrhyme.micyou.platform
 
 import com.lanrhyme.micyou.Logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 
 object AdbManager {
     private var adbPath: String? = null
-    
+
     fun findAdb(): String? {
         adbPath?.let { path ->
             if (File(path).exists()) {
@@ -18,7 +20,7 @@ object AdbManager {
     val pathEnv = System.getenv("PATH") ?: return null
         val pathSeparator = if (PlatformInfo.isWindows) ";" else ":"
         val adbExecutable = if (PlatformInfo.isWindows) "adb.exe" else "adb"
-        
+
         for (pathDir in pathEnv.split(pathSeparator)) {
             val adbFile = File(pathDir, adbExecutable)
             if (adbFile.exists() && adbFile.canExecute()) {
@@ -41,7 +43,7 @@ object AdbManager {
                 "/opt/android-sdk/platform-tools/adb"
             )
         }
-        
+
         for (path in commonPaths) {
             val file = File(path)
             if (file.exists()) {
@@ -50,24 +52,24 @@ object AdbManager {
                 return adbPath
             }
         }
-        
+
         Logger.w("AdbManager", "未找到 ADB")
         return null
     }
-    
-    fun runAdbReverse(port: Int): Boolean {
+
+    suspend fun runAdbReverse(port: Int): Boolean = withContext(Dispatchers.IO) {
         val adb = findAdb() ?: run {
             Logger.e("AdbManager", "ADB 未找到，无法执行 reverse")
-            return false
+            return@withContext false
         }
-        
-        return try {
+
+        try {
             val process = ProcessBuilder(adb, "reverse", "tcp:$port", "tcp:$port")
                 .redirectErrorStream(true)
                 .start()
     val output = process.inputStream.bufferedReader().readText()
     val exitCode = process.waitFor()
-            
+
             if (exitCode == 0 && output.contains("error", ignoreCase = true).not()) {
                 Logger.i("AdbManager", "ADB reverse 成功: $port")
                 true
@@ -80,14 +82,14 @@ object AdbManager {
             false
         }
     }
-    
+
     fun checkAdbAvailable(): Boolean {
         return findAdb() != null
     }
-    
+
     fun getAdbVersion(): String? {
         val adb = findAdb() ?: return null
-        
+
         return try {
             val process = ProcessBuilder(adb, "version")
                 .redirectErrorStream(true)
@@ -95,7 +97,7 @@ object AdbManager {
     val reader = BufferedReader(InputStreamReader(process.inputStream))
     val firstLine = reader.readLine()
             process.waitFor()
-            
+
             firstLine
         } catch (e: Exception) {
             null

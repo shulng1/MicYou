@@ -575,20 +575,24 @@ private fun LeftPanel(
             hazeState = hazeState,
             enableHaze = state.backgroundSettings.enableHazeEffect
         )
-        
-        PortCard(
-            port = state.port,
-            onPortChange = { viewModel.setPort(it) },
-            cardOpacity = cardOpacity,
-            hazeState = hazeState,
-            enableHaze = state.backgroundSettings.enableHazeEffect
-        )
+
+        if (state.mode != ConnectionMode.Web) {
+            PortCard(
+                port = state.port,
+                onPortChange = { viewModel.setPort(it) },
+                cardOpacity = cardOpacity,
+                hazeState = hazeState,
+                enableHaze = state.backgroundSettings.enableHazeEffect
+            )
+        }
 
         if (state.mode == ConnectionMode.Web) {
             QrCodeCard(
                 webUrl = state.webUrl,
                 webClientCount = state.webClientCount,
                 streamState = state.streamState,
+                port = state.port,
+                onPortChange = { viewModel.setPort(it) },
                 cardOpacity = cardOpacity,
                 hazeState = hazeState,
                 enableHaze = state.backgroundSettings.enableHazeEffect
@@ -787,6 +791,8 @@ private fun QrCodeCard(
     webUrl: String,
     webClientCount: Int,
     streamState: StreamState,
+    port: String,
+    onPortChange: (String) -> Unit,
     cardOpacity: Float = 1f,
     hazeState: HazeState? = null,
     enableHaze: Boolean = false
@@ -801,7 +807,6 @@ private fun QrCodeCard(
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
@@ -810,54 +815,79 @@ private fun QrCodeCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            if (streamState == StreamState.Streaming || streamState == StreamState.Connecting) {
-                if (webUrl.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .size(140.dp)
-                            .clip(MaterialTheme.shapes.medium)
-                            .background(MaterialTheme.colorScheme.surface),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        QrCodeImage(
-                            content = webUrl,
-                            modifier = Modifier.size(124.dp),
-                            sizeDp = 124
-                        )
-                    }
+            AnimatedVisibility(
+                visible = streamState == StreamState.Idle,
+                enter = fadeIn(tween(200)) + expandVertically(),
+                exit = fadeOut(tween(150)) + shrinkVertically()
+            ) {
+                ShardTextField(
+                    value = port,
+                    onValueChange = onPortChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+            }
 
-                    if (webClientCount > 0) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            if (streamState == StreamState.Streaming || streamState == StreamState.Connecting) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (webUrl.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .size(140.dp)
+                                .clip(MaterialTheme.shapes.medium)
+                                .background(MaterialTheme.colorScheme.surface),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                Icons.Rounded.CheckCircle,
-                                null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(14.dp)
+                            QrCodeImage(
+                                content = webUrl,
+                                modifier = Modifier.size(124.dp),
+                                sizeDp = 124
                             )
-                            Text(
-                                "${stringResource(Res.string.webClientCountLabel)}: $webClientCount",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                        }
+
+                        if (webClientCount > 0) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.CheckCircle,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    "${stringResource(Res.string.webClientCountLabel)}: $webClientCount",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }
             } else {
-                Icon(
-                    Icons.Rounded.Language,
-                    null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.size(48.dp)
-                )
-                Text(
-                    stringResource(Res.string.webScanHint),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        Icons.Rounded.Language,
+                        null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Text(
+                        stringResource(Res.string.webScanHint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
     }

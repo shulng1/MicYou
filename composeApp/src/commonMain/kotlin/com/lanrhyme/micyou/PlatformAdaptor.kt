@@ -23,7 +23,7 @@ expect object PlatformAdaptor {
      * @param port The port to reverse.
      * @return true if successful or not needed, false if failed.
      */
-    fun runAdbReverse(port: Int): Boolean
+    suspend fun runAdbReverse(port: Int): Boolean
     
     /**
      * Clean up temporary files.

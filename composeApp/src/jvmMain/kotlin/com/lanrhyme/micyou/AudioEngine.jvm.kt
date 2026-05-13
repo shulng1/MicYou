@@ -340,26 +340,38 @@ actual class AudioEngine actual constructor() {
                      } catch (e: Exception) {
                          Logger.e("AudioEngine", "Error in async stop: ${e.message}", e)
                      }
+                     // Stop web server as well
+                     try {
+                         webServer.stop()
+                         _webUrl.value = ""
+                         _webClientCount.value = 0
+                     } catch (e: Exception) {
+                         Logger.w("AudioEngine", "Error stopping WebServer: ${e.message}")
+                     }
+                     // Release resources asynchronously to avoid blocking UI
+                     try {
+                         audioOutputManager.release()
+                     } catch (e: Exception) {
+                         Logger.w("AudioEngine", "Error releasing AudioOutputManager: ${e.message}")
+                     }
+                     try {
+                         audioPipeline.release()
+                     } catch (e: Exception) {
+                         Logger.w("AudioEngine", "Error releasing AudioProcessorPipeline: ${e.message}")
+                     }
+                     try {
+                         mdnsAdvertiser.close()
+                     } catch (e: Exception) {
+                         Logger.w("AudioEngine", "Error closing MdnsAdvertiser: ${e.message}")
+                     }
                  }
              } else {
                  Logger.d("AudioEngine", "Stop operation already in progress, skipping duplicate stop request")
-             }
-             // Stop web server as well
-             try {
-                 webServer.stop()
-                 _webUrl.value = ""
-                 _webClientCount.value = 0
-             } catch (e: Exception) {
-                 Logger.w("AudioEngine", "Error stopping WebServer: ${e.message}")
              }
              _lastError.value = null
              _state.value = StreamState.Idle
          } catch (e: Exception) {
              Logger.e("AudioEngine", "Error stopping audio engine: ${e.message}", e)
-         } finally {
-             audioOutputManager.release()
-             audioPipeline.release()
-             mdnsAdvertiser.close()
          }
     }
     

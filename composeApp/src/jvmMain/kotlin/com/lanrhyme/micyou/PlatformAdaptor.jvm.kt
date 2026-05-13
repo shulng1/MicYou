@@ -12,7 +12,7 @@ actual object PlatformAdaptor {
     actual fun restoreAudioOutput(token: Any?) {
     }
     
-    actual fun runAdbReverse(port: Int): Boolean {
+    actual suspend fun runAdbReverse(port: Int): Boolean {
         return AdbManager.runAdbReverse(port)
     }
     
