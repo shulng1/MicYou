@@ -426,10 +426,11 @@ actual class AudioEngine actual constructor() {
                         // Use read buffer sized to avoid IP fragmentation on WiFi
                         // Path MTU = 1500, minus IP(20)+UDP(8)+header(8)+ProtoBuf(~30) ≈ 1434 safe payload
     val udpSafePayloadSize = 1400
-    val readBufSize = if (androidAudioFormat == AudioFormat.ENCODING_PCM_FLOAT) {
-                            minOf(minBufSize, udpSafePayloadSize).coerceAtLeast(256)
-                        } else {
-                            minOf(minBufSize, udpSafePayloadSize).coerceAtLeast(512)
+                        val bytesPerSample = when (androidAudioFormat) {
+                            AudioFormat.ENCODING_PCM_8BIT -> 1
+                            AudioFormat.ENCODING_PCM_16BIT -> 2
+                            AudioFormat.ENCODING_PCM_FLOAT -> 4
+                            else -> 2
                         }
                         val frameAlignBytes = 480 * bytesPerSample * channelCount.value
                         val alignedPayloadSize = (udpSafePayloadSize / frameAlignBytes) * frameAlignBytes

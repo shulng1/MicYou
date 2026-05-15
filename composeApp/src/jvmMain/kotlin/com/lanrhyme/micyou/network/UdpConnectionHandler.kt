@@ -26,7 +26,7 @@ class UdpConnectionHandler(
     private val port: Int,
     private val onAudioPacketReceived: suspend (AudioPacketMessage) -> Unit,
     private val onError: (String) -> Unit,
-    private val onAudioPacketOrderedReceived: (suspend (AudioPacketMessageOrdered) -> Unit)? = null
+    private val onAudioPacketOrderedReceived: ((AudioPacketMessageOrdered) -> Unit)? = null
 ) {
     @OptIn(ExperimentalSerializationApi::class)
     private val proto = ProtoBuf { }
@@ -97,7 +97,9 @@ class UdpConnectionHandler(
 
     private suspend fun runUdpReceiver() {
         try {
-            udpSocket = DatagramSocket(port).also { socket ->
+            udpSocket = DatagramSocket(null).also { socket ->
+                socket.reuseAddress = true
+                socket.bind(java.net.InetSocketAddress(port))
                 // Set receive buffer size for audio stream
                 socket.receiveBufferSize = 2 * 1024 * 1024 // 2MB
                 val actualBufferSize = socket.receiveBufferSize
@@ -233,6 +235,7 @@ class UdpConnectionHandler(
                 lastTransmitTime = transmitTime
                 lastReceiveTime = receiveTime
 
+                // 如果有有序包回调，使用它；否则直接调用音频包回调
                 if (onAudioPacketOrderedReceived != null) {
                     onAudioPacketOrderedReceived.invoke(wrapper.audioPacket)
                 } else {

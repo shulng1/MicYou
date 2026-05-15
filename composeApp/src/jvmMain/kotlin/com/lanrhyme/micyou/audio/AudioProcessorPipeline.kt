@@ -34,6 +34,11 @@ class AudioProcessorPipeline {
     // 可配置的性能参数
     private var config: PerformanceConfig = PerformanceConfig.DEFAULT
 
+    // 帧累积缓冲区（用于对齐处理帧大小）
+    private val nsFrameSize = 480
+    private var accumBuffer = ShortArray(0)
+    private var accumCount = 0
+
     // 预分配的缓冲区 - 使用可配置的初始容量
     private var scratchShorts: ShortArray = ShortArray(config.initialShortsCapacity)
     private var scratchResultBuffer: ByteArray = ByteArray(config.initialBytesCapacity)
@@ -82,6 +87,22 @@ class AudioProcessorPipeline {
         if (newProcessingChain != null && newProcessingChain.isNotEmpty()) {
             processingChain = newProcessingChain
         }
+    }
+
+    /**
+     * 将新样本追加到累积缓冲区
+     */
+    private fun appendToAccumulator(newSamples: ShortArray) {
+        val requiredSize = accumCount + newSamples.size
+        if (accumBuffer.size < requiredSize) {
+            val newBuffer = ShortArray(requiredSize * 2) // 2x growth factor
+            if (accumCount > 0) {
+                System.arraycopy(accumBuffer, 0, newBuffer, 0, accumCount)
+            }
+            accumBuffer = newBuffer
+        }
+        System.arraycopy(newSamples, 0, accumBuffer, accumCount, newSamples.size)
+        accumCount += newSamples.size
     }
 
     /**

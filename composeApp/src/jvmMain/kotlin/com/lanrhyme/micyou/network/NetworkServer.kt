@@ -125,19 +125,19 @@ class NetworkServer(
         val udpPort = calculateUdpPort(port)
         Logger.i("NetworkServer", "启动双协议服务器: TCP 端口 $port, UDP 端口 $udpPort")
 
-        // 启动 Jitter Buffer
+        // 启动 Jitter Buffer（处理乱序包）
         jitterBuffer = JitterBuffer(onAudioPacketReceived).also { it.start() }
 
         // 启动 UDP 接收器
         udpHandler = UdpConnectionHandler(
             port = udpPort,
             onAudioPacketReceived = onAudioPacketReceived,
-            onAudioPacketOrderedReceived = { packet ->
-                jitterBuffer?.insert(packet)
-            },
             onError = { error ->
                 Logger.w("UdpConnectionHandler", "UDP 错误: $error")
                 // UDP 错误不中断连接，仅记录
+            },
+            onAudioPacketOrderedReceived = { packet ->
+                jitterBuffer?.insert(packet)
             }
         )
         udpHandler?.start()
@@ -252,7 +252,7 @@ class NetworkServer(
 
             jitterBuffer?.stop()
             jitterBuffer = null
-            
+
             selectorManager?.close()
             selectorManager = null
         } catch (e: Exception) {
