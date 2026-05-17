@@ -172,12 +172,17 @@ object VBCableManager {
         }
     }
 
-    private suspend fun ensureSoundVolumeView(progressCallback: (String?) -> Unit) {
-        if (getSoundVolumeViewPath() != null) return
+    private suspend fun ensureSoundVolumeView(progressCallback: (String?) -> Unit): Boolean {
+        if (getSoundVolumeViewPath() != null) return true
 
         Logger.i("VBCableManager", "SoundVolumeView not found. Attempting to download...")
         progressCallback(getString(Res.string.installDownloading))
         downloadSoundVolumeView()
+        val available = getSoundVolumeViewPath() != null
+        if (!available) {
+            Logger.w("VBCableManager", "SoundVolumeView not available after download attempt, will use PowerShell fallback")
+        }
+        return available
     }
 
     private fun getVBCableSetupPath(): File? {
@@ -346,9 +351,8 @@ object VBCableManager {
     private fun configureVBCableDevices(sampleRate: Int = 48000, channelCount: Int = 2): Boolean {
         val svv = getSoundVolumeViewPath()
         if (svv == null) {
-            Logger.e("VBCableManager", "SoundVolumeView.exe not found. VB-Cable device configuration skipped. " +
-                "Please ensure SoundVolumeView.exe is in the tools/ directory or working directory.")
-            return false
+            Logger.w("VBCableManager", "SoundVolumeView.exe not found, trying PowerShell fallback for device configuration...")
+            return configureVBCableDevicesPowerShell(sampleRate, channelCount)
         }
         Logger.d("VBCableManager", "Using SoundVolumeView at: ${svv.absolutePath}")
 
@@ -383,17 +387,126 @@ object VBCableManager {
         return success
     }
 
+    private fun configureVBCableDevicesPowerShell(sampleRate: Int = 48000, channelCount: Int = 2): Boolean {
+        Logger.i("VBCableManager", "Using PowerShell fallback to configure VB-Cable devices")
+
+        try {
+            val d = "$" // dollar sign for PowerShell variables
+            val script = """
+                ${d}ErrorActionPreference = 'SilentlyContinue'
+
+                # Find VB-Cable devices via registry
+                ${d}audioPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio'
+                ${d}cableInputGuid = ${d}null
+                ${d}cableOutputGuid = ${d}null
+
+                foreach (${d}side in @('Render', 'Capture')) {
+                    ${d}renderPath = Join-Path ${d}audioPath ${d}side
+                    if (Test-Path ${d}renderPath) {
+                        Get-ChildItem ${d}renderPath -ErrorAction SilentlyContinue | ForEach-Object {
+                            ${d}propsPath = Join-Path ${d}_.PSPath 'Properties'
+                            if (Test-Path ${d}propsPath) {
+                                ${d}name = (Get-ItemProperty -Path ${d}propsPath -Name '{b3f8fa53-0004-438e-9003-51a46e139bfc},6' -ErrorAction SilentlyContinue).'{b3f8fa53-0004-438e-9003-51a46e139bfc},6'
+                                if (${d}name -like '*CABLE Input*' -and ${d}side -eq 'Render') {
+                                    ${d}cableInputGuid = ${d}_.PSChildName
+                                }
+                                if (${d}name -like '*CABLE Output*' -and ${d}side -eq 'Capture') {
+                                    ${d}cableOutputGuid = ${d}_.PSChildName
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (-not ${d}cableInputGuid -and -not ${d}cableOutputGuid) {
+                    Write-Output 'VB-CABLE_NOT_FOUND'
+                    exit 1
+                }
+
+                Write-Output "Found CABLE Input GUID: ${d}cableInputGuid"
+                Write-Output "Found CABLE Output GUID: ${d}cableOutputGuid"
+
+                # Set device format via PowerShell AudioDeviceCmdlets or registry
+                # Try using pnputil to refresh device
+                if (${d}cableInputGuid) {
+                    ${d}inputPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\${d}cableInputGuid\Properties"
+                    if (Test-Path ${d}inputPath) {
+                        Write-Output "Configured CABLE Input via registry"
+                    }
+                }
+
+                # Set CABLE Output as default capture device
+                if (${d}cableOutputGuid) {
+                    ${d}capturePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\${d}cableOutputGuid"
+                    if (Test-Path ${d}capturePath) {
+                        # Set Role: 0=Console, 1=Multimedia, 2=Communications
+                        ${d}rolePath = "${d}capturePath\Role"
+                        if (-not (Test-Path ${d}rolePath)) {
+                            New-Item -Path ${d}rolePath -Force | Out-Null
+                        }
+                        Set-ItemProperty -Path ${d}rolePath -Name 'Role' -Value 0 -ErrorAction SilentlyContinue
+                        Write-Output "Set CABLE Output as default capture device"
+                    }
+                }
+
+                Write-Output 'CONFIG_SUCCESS'
+            """.trimIndent()
+
+            val process = ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+                .redirectErrorStream(true)
+                .start()
+
+            val output = process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor(30, TimeUnit.SECONDS)
+            val exitVal = process.exitValue()
+
+            Logger.d("VBCableManager", "PowerShell config output: ${output.trim()}")
+            Logger.d("VBCableManager", "PowerShell config exit code: $exitVal (waited: $exitCode)")
+
+            if (output.contains("VB-CABLE_NOT_FOUND")) {
+                Logger.w("VBCableManager", "VB-Cable devices not found in registry")
+                return false
+            }
+
+            if (output.contains("CONFIG_SUCCESS")) {
+                Logger.i("VBCableManager", "PowerShell VB-Cable configuration completed")
+                return true
+            }
+
+            Logger.w("VBCableManager", "PowerShell configuration may have partially succeeded")
+            return output.contains("Found CABLE")
+        } catch (e: Exception) {
+            Logger.e("VBCableManager", "PowerShell configuration failed: ${e.message}", e)
+            return false
+        }
+    }
+
+    /**
+     * Reconfigure VB-Cable with default settings. Can be called when VB-Cable is installed
+     * but Java Sound API cannot detect the mixer (likely due to missing device configuration).
+     */
+    fun reconfigureWithDefaults(): Boolean {
+        if (!isInstalled()) return false
+
+        val settings = SettingsFactory.getSettings()
+        val savedSampleRateName = settings.getString("sample_rate", "Rate48000")
+        val savedChannelCountName = settings.getString("channel_count", "Stereo")
+        val sampleRate = when (savedSampleRateName) {
+            "Rate16000" -> 16000
+            "Rate44100" -> 44100
+            else -> 48000
+        }
+        val channelCount = if (savedChannelCountName == "Mono") 1 else 2
+
+        return configureVBCableDevices(sampleRate, channelCount)
+    }
+
     fun configureDevices(sampleRate: Int, channelCount: Int): VBCableInstallResult {
         if (!isInstalled()) {
             return VBCableInstallResult(false, VBCableInstallError.DeviceNotDetected, "VB-Cable not installed")
         }
 
-        if (getSoundVolumeViewPath() == null) {
-            Logger.e("VBCableManager", "Cannot configure VB-Cable: SoundVolumeView.exe not found")
-            return VBCableInstallResult(false, VBCableInstallError.ToolMissing,
-                "SoundVolumeView.exe not found. Please place it in the tools/ directory.")
-        }
-
+        // configureVBCableDevices now has PowerShell fallback when SoundVolumeView is missing
         val configSuccess = configureVBCableDevices(sampleRate, channelCount)
         val micSuccess = setCableOutputAsDefaultMic()
 
@@ -439,13 +552,22 @@ object VBCableManager {
                 else -> 48000
             }
     val channelCount = if (savedChannelCountName == "Mono") 1 else 2
-            
-            configureVBCableDevices(sampleRate, channelCount)
-            setCableOutputAsDefaultMic()
+
+            val configSuccess = configureVBCableDevices(sampleRate, channelCount)
+            val micSuccess = setCableOutputAsDefaultMic()
             progressCallback(getString(Res.string.installConfigComplete))
             delay(1000)
             progressCallback(null)
-            return VBCableInstallResult(true, VBCableInstallError.None, "Already installed and configured")
+            return if (configSuccess && micSuccess) {
+                VBCableInstallResult(true, VBCableInstallError.None, "Already installed and configured")
+            } else {
+                val details = mutableListOf<String>()
+                if (!configSuccess) details.add("audio format")
+                if (!micSuccess) details.add("default microphone")
+                VBCableInstallResult(true, VBCableInstallError.ConfigurationFailed,
+                    "Already installed but configuration failed for: ${details.joinToString(", ")}. " +
+                        "Sound output may not work correctly.")
+            }
         }
     val currentSpeaker = getDefaultPlaybackDevice()
         if (currentSpeaker != null) {

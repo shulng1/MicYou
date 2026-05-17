@@ -4,6 +4,7 @@ import com.lanrhyme.micyou.Logger
 import com.lanrhyme.micyou.platform.BlackHoleManager
 import com.lanrhyme.micyou.platform.PipeWireManager
 import com.lanrhyme.micyou.platform.PlatformInfo
+import com.lanrhyme.micyou.platform.VBCableManager
 import javax.sound.sampled.*
 
 class AudioOutputManager {
@@ -30,16 +31,26 @@ class AudioOutputManager {
             }
             release()
         }
-        
-        Logger.d("AudioOutputManager", "Initialize audio output: Sample rate = \$sampleRate, Channel count = \$channelCount")
-        
-        currentSampleRate = sampleRate
-        currentChannelCount = channelCount
-        
+
+        // Validate format parameters - use defaults if invalid
+        val validSampleRate = if (sampleRate > 0) sampleRate else {
+            Logger.w("AudioOutputManager", "Invalid sample rate ($sampleRate), using 48000")
+            48000
+        }
+        val validChannelCount = if (channelCount > 0) channelCount else {
+            Logger.w("AudioOutputManager", "Invalid channel count ($channelCount), using 2 (stereo)")
+            2
+        }
+
+        Logger.d("AudioOutputManager", "Initialize audio output: Sample rate = $validSampleRate, Channel count = $validChannelCount")
+
+        currentSampleRate = validSampleRate
+        currentChannelCount = validChannelCount
+
         val audioFormat = AudioFormat(
-            sampleRate.toFloat(),
+            validSampleRate.toFloat(),
             16,
-            channelCount,
+            validChannelCount,
             true,
             false
         )
@@ -238,10 +249,31 @@ class AudioOutputManager {
                     Logger.e("AudioOutputManager", "Failed to initialize VB-CABLE", e)
                 }
             } else {
-                Logger.w("AudioOutputManager", "VB-CABLE not found on Windows. Audio will be muted for privacy unless a device is manually selected.")
+                // VB-Cable mixer not found - try reconfiguration if VB-Cable is installed
+                if (VBCableManager.isInstalled()) {
+                    Logger.w("AudioOutputManager", "VB-Cable installed but mixer not found in Java Sound API. Attempting reconfiguration...")
+                    if (VBCableManager.reconfigureWithDefaults()) {
+                        val retryMixer = findVBCableMixer(lineInfo)
+                        if (retryMixer != null) {
+                            try {
+                                outputLine = retryMixer.getLine(lineInfo) as SourceDataLine
+                                isUsingVirtualDevice = true
+                                Logger.i("AudioOutputManager", "Using VB-CABLE Input (after reconfiguration)")
+                                if (openAndStartLine(audioFormat)) {
+                                    return true
+                                }
+                            } catch (e: Exception) {
+                                Logger.e("AudioOutputManager", "Failed to initialize VB-CABLE after reconfiguration", e)
+                            }
+                        }
+                    }
+                    Logger.w("AudioOutputManager", "VB-CABLE reconfiguration failed. Audio will be muted unless a device is manually selected.")
+                } else {
+                    Logger.w("AudioOutputManager", "VB-CABLE not found on Windows. Audio will be muted for privacy unless a device is manually selected.")
+                }
             }
         }
-        
+
         // 3. 最后回退到系统默认输出设备
         return try {
             outputLine = AudioSystem.getLine(lineInfo) as SourceDataLine
@@ -249,8 +281,19 @@ class AudioOutputManager {
             Logger.i("AudioOutputManager", "Use the system's default audio output")
             openAndStartLine(audioFormat)
         } catch (e: Exception) {
-            Logger.e("AudioOutputManager", "Failed to obtain the default system output device.", e)
-            false
+            Logger.e("AudioOutputManager", "Failed to obtain the default system output device. Trying standard format fallback...", e)
+            // Fallback: try with standard 48kHz stereo format
+            try {
+                val fallbackFormat = AudioFormat(48000f, 16, 2, true, false)
+                val fallbackLineInfo = DataLine.Info(SourceDataLine::class.java, fallbackFormat)
+                outputLine = AudioSystem.getLine(fallbackLineInfo) as SourceDataLine
+                isUsingVirtualDevice = false
+                Logger.i("AudioOutputManager", "Use the system's default audio output (fallback format)")
+                openAndStartLine(fallbackFormat)
+            } catch (e2: Exception) {
+                Logger.e("AudioOutputManager", "Fallback also failed. No audio output available.", e2)
+                false
+            }
         }
     }
 
